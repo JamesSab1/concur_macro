@@ -1,0 +1,174 @@
+Function SaveNewFile(wb As Workbook, MyFilename As String)  
+
+    Dim FName As Variant  
+    
+    If Not bolDebug Then On Error GoTo errHandler  
+    
+SaveAsDialog:  
+    FName = Application.GetSaveAsFilename(InitialFileName:=MyFilename, _  
+        FileFilter:="Excel files (*.XLS), *.XLS", Title:="Save As")  
+    If FName <> False Then  
+        If Len(Dir(FName)) Then  
+            Select Case MsgBox("A file named '" & FName & _  
+                "' already exists at this location. Do you want to replace it?", _  
+                    vbYesNoCancel + vbInformation)  
+            Case vbYes  
+                'want to overwrite  
+                Application.DisplayAlerts = False  
+                wb.SaveAs FName, ConflictResolution:=2, Addtomru:=True  
+                Application.DisplayAlerts = True  
+                Set SaveCurrentWorkbook = wb  
+            Case vbNo  
+                GoTo SaveAsDialog  
+            Case vbCancel  
+                SaveCurrentWorkbook = False  
+                Err.Raise 11111, , "Save Cancelled"  
+            End Select  
+        Else  
+            wb.SaveAs FName, ConflictResolution:=True, Addtomru:=True  
+            Set SaveCurrentWorkbook = wb  
+        End If  
+    Else  
+        SaveCurrentWorkbook = False  
+        Err.Raise 11111, , "Save Cancelled"  
+    End If  
+    
+exitProc:  
+    Exit Function  
+
+errHandler:  
+    Select Case Err.Number  
+    Case 1004 'Clicked "No" or "Cancel" - same error number  
+      Resume SaveAsDialog  
+    Case Else  
+      MsgBox "File not saved. Stopping script.", vbOKOnly, Err.Description    
+      Resume exitProc  
+    End Select  
+
+End Function  
+
+Function ResetWorkbooks(MyFile As String)  
+
+    Dim Concurfile As Variant  
+    
+    Concurfile = Application.GetOpenFilename()  
+    If Concurfile = False Then  
+        MsgBox "Cancelled, stopping script."  
+        Exit Function  
+    End If  
+    Workbooks.Open (Concurfile)  
+    'this could produce a bug if the wrong template location is selected ie won't be able to close that workbook  
+    'file location is currently hardcoded  
+    Workbooks("CONCUR TEMPLATE.xls").Close SaveChanges:=False  
+    If Concurfile <> False Then  
+        ResetWorkbooks = 1  
+    End If   
+End Function  
+
+Sub ConcurJnl()  
+
+' 
+' Automates the concur journal process from download 
+'  
+
+    Dim MyPath As String  
+    Dim MyFile As String  
+    Dim wb As Workbook  
+
+    MyPath = "C:\path\tp\templatefolder"  
+    MyFile = MyPath & "CONCUR TEMPLATE.xls"  
+
+TryAgain:  
+'Set up error handling  
+    On Error GoTo BadEntry  
+
+'  
+'needs to have concur download open at this point  
+'  
+
+    Range("A1").CurrentRegion.Copy  
+    
+    Set wb = Workbooks.Open(MyFile)  
+    wb.Sheets("WORKINGS").Activate  
+    ActiveSheet.Cells(1, 1).PasteSpecial (xlPasteValues)  
+
+'  
+' Populates journal once data is in the template  
+'  
+
+    Range("A1").Select  
+    
+'create pivot table  
+
+    ActiveWorkbook.PivotCaches.Create(SourceType:=xlDatabase, SourceData:= _  
+        "WORKINGS!R1C1:R71C12", Version:=xlPivotTableVersion10).CreatePivotTable _  
+        TableDestination:="WORKINGS!R2C14", TableName:="PivotTable1", _
+        DefaultVersion:=xlPivotTableVersion10  
+    Sheets("WORKINGS").Select  
+    Cells(2, 14).Select  
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("Report ID")  
+        .Orientation = xlRowField  
+        .Position = 1  
+    End With  
+    ActiveSheet.PivotTables("PivotTable1").AddDataField ActiveSheet.PivotTables( _  
+        "PivotTable1").PivotFields("Total Employee Due"), "Sum of Total Employee Due", _  
+        xlSum  
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields( _  
+        "Sum of Total Employee Due")  
+        .Caption = "Max of Total Employee Due"  
+        .Function = xlMax  
+    End With  
+    With ActiveSheet.PivotTables("PivotTable1")  
+        .ColumnGrand = False  
+        .RowGrand = False  
+    End With  
+
+
+    ActiveSheet.Range("$AA$1:$AA$3001").AutoFilter Field:=1, Criteria1:=">0", _
+    Criteria2:="<>*Total*", Operator:=xlFilterValues  
+
+'select the data to paste into jnl  
+
+    Range("U3:AD3").Select  
+    Range(Selection, Selection.End(xlDown)).Select  
+    Selection.Copy  
+    Sheets("JOURNAL LOADER").Select  
+    Range("C13").PasteSpecial (xlPasteValues)  
+    
+    Sheets("JOURNAL LOADER").Copy  
+        
+        
+'save journal page and save  
+
+    Dim MyPrefix As String  
+    Dim MyDate As String  
+    Dim MyFilename As String  
+    
+    
+    MyPrefix = "concur_jnl_"  
+    MyDate = Date  
+    MyDate = Replace(MyDate, "/", "_")  
+    MyFilename = MyPrefix & MyDate  
+
+    Result = SaveNewFile(ActiveWorkbook, MyFilename)  
+
+BadEntry:  
+    Dim Cnt As Long  
+    Dim TAns  
+    
+    Cnt = 0  
+    If Err.Number <> 0 Then  
+        MsgBox Err.Number & " " & Err.Description, vbOKOnly & vbExclamation, "Fatal error"  
+        TAns = MsgBox("Try Again?", vbYesNo)  
+        If TAns = vbYes Then  
+            Cnt = ResetWorkbooks(MyFile)  
+            If Cnt = 1 Then  
+                Resume TryAgain  
+            End If  
+        End If  
+        If TAns = vbNo Then  
+            'reset workbooks?  
+        End If  
+    End If  
+          
+End Sub  
